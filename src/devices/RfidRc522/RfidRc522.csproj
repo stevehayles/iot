@@ -1,0 +1,19 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netcoreapp2.1</TargetFramework>
+    <EnableDefaultItems>false</EnableDefaultItems>
+    <LangVersion>7.3</LangVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.Device.Gpio" Version="0.1.0-prerelease*" />
+    <Compile Include="MFRC522Register.cs" />
+    <Compile Include="MFRC52Command.cs" />
+    <Compile Include="PiccCommand.cs" />
+    <Compile Include="RfidRc522.cs" />
+    <Compile Include="StatusCode.cs" />
+    <None Include="README.md" />
+  </ItemGroup>
+
+</Project>
