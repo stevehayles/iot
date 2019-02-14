@@ -13,5 +13,7 @@ namespace Iot.Device.RfidRc522
         CrcMismatch,
         Timeout,
         Error,
+        Invalid,
+        InternalError,
     }
 }

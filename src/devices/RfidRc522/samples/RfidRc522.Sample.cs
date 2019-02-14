@@ -8,6 +8,7 @@ using System.Device.I2c;
 using System.Device.I2c.Drivers;
 using System.Device.Spi;
 using System.Device.Spi.Drivers;
+using System.Linq;
 using System.Threading;
 using Iot.Device.RfidRc522;
 
@@ -71,22 +72,26 @@ namespace Iot.Device.RfidRc522.Samples
 
                 //Thread.Sleep(50);
 
-                foreach (MFRC522Register reg in typeof(MFRC522Register).GetEnumValues())
-                {
-                    byte val = mfrc522.RegisterGet(reg);
-                    Console.WriteLine($"{reg} = {val} [{val.ToString("X2")}] [{Convert.ToString(val, 2).PadLeft(8, '0')}]");
-                }
+                // foreach (MFRC522Register reg in typeof(MFRC522Register).GetEnumValues())
+                // {
+                //     byte val = mfrc522.RegisterGet(reg);
+                //     Console.WriteLine($"{reg} = {val} [{val.ToString("X2")}] [{Convert.ToString(val, 2).PadLeft(8, '0')}]");
+                // }
 
                 while (true)
                 {
                     if (!mfrc522.PICC_IsNewCardPresent())
                         continue;
 
-                    Console.WriteLine("New card is present");
-                    //if (!mfrc522.PICC_ReadCardSerial())
-                    //    continue;
+                    //Console.WriteLine("New card is present");
+                    Uid uid = new Uid();
+                    if (!mfrc522.PICC_ReadCardSerial(ref uid))
+                    {
+                        //Console.WriteLine("Could not read serial");
+                        continue;
+                    }
 
-                    //Console.WriteLine(mfrc522.PICC_GetSerial());
+                    Console.WriteLine($"{uid.Size}: {string.Join("", uid.UnsafeValue.ToArray().Select((x) => x.ToString("X2")))}: {uid.Sak.ToString("X2")}");
                 }
             }
         }

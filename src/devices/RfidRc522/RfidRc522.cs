@@ -208,21 +208,6 @@ namespace Iot.Device.RfidRc522
             }
         }
 
-        //public byte ReadFromRegister(MFRC522Register reg)
-        //{
-        //    byte[] w = new byte[2] { (byte)(ReadMask | (byte)((byte)reg << 1)), 0 };
-        //    byte[] r = new byte[2];
-        //    _spi.TransferFullDuplex(w, r);
-        //    return r[1];
-        //}
-
-        //public void WriteToRegister(MFRC522Register reg, byte b)
-        //{
-        //    byte[] w = new byte[2] { (byte)(WriteMask | (byte)((byte)reg << 1)), b };
-        //    byte[] r = new byte[2];
-        //    _spi.TransferFullDuplex(w, r);
-        //}
-
         private StatusCode PCD_CommunicateWithPICC(
             MFRC52Command command,
             byte waitIrq,
@@ -276,11 +261,11 @@ namespace Iot.Device.RfidRc522
             // At Least 35.75ms have elapsed, communication might be down
             if (timeout)
             {
-                Console.WriteLine("timeout (software)");
+                //Console.WriteLine("timeout (software)");
                 return StatusCode.Timeout;
             }
 
-            Console.WriteLine("no timeout");
+            //Console.WriteLine("no timeout");
 
             byte errorRegValue = RegisterGet(MFRC522Register.ErrorReg);
 
@@ -373,6 +358,246 @@ namespace Iot.Device.RfidRc522
             return PICC_REQA_or_WUPA(PiccCommand.PICC_CMD_REQA, atqa, out bytesWritten);
         }
 
+        private StatusCode CalculateCRC(ReadOnlySpan<byte> data, Span<byte> result)
+        {
+            Debug.Assert(result.Length == 2, "result length must be exactly 2 bytes");
+            
+            RegisterSet(MFRC522Register.CommandReg, (byte)MFRC52Command.Idle);
+
+            RegisterSet(MFRC522Register.DivIrqReg, 0x04);
+            RegisterSet(MFRC522Register.FIFOLevelReg, 0x80);
+            RegisterSet(MFRC522Register.FIFODataReg, data);
+            RegisterSet(MFRC522Register.CommandReg, (byte)MFRC52Command.CalcCRC);
+
+            Stopwatch sw = Stopwatch.StartNew();
+            while (sw.ElapsedMilliseconds < 89)
+            {
+                byte n = RegisterGet(MFRC522Register.DivIrqReg);
+                if ((n & 0x04) != 0)
+                {
+                    RegisterSet(MFRC522Register.CommandReg, (byte)MFRC52Command.Idle);
+                    result[0] = RegisterGet(MFRC522Register.CRCResultRegLow);
+                    result[1] = RegisterGet(MFRC522Register.CRCResultRegHigh);
+                    return StatusCode.Ok;
+                }
+            }
+
+            return StatusCode.Timeout;
+        }
+
+        private StatusCode PICC_Select(ref Uid uid, byte validBits = 0)
+        {
+            if (validBits > 80)
+                return StatusCode.Invalid;
+
+            RegisterClearMask(MFRC522Register.CollReg, 0x80);
+
+            StatusCode result;
+            Span<byte> buffer = stackalloc byte[9];
+            Span<byte> responseBuffer = buffer.Slice(0, 0);
+            byte uidIndex;
+            byte index;
+            byte cascadeLevel = 1;
+            bool useCascadeTag;
+            byte count;
+            byte checkBit;
+            byte txLastBits = 0; // !
+            byte bufferUsed;
+            byte rxAlign;
+
+            bool uidComplete = false;
+            while (!uidComplete)
+            {
+                switch (cascadeLevel)
+                {
+                    case 1:
+                    {
+                        buffer[0] = (byte)PiccCommand.PICC_CMD_SEL_CL1;
+                        uidIndex = 0;
+                        useCascadeTag = validBits != 0 && uid.Size > 4;
+                        break;
+                    }
+                    case 2:
+                    {
+                        buffer[0] = (byte)PiccCommand.PICC_CMD_SEL_CL2;
+                        uidIndex = 3;
+                        useCascadeTag = validBits != 0 && uid.Size > 7;
+                        break;
+                    }
+                    case 3:
+                    {
+                        buffer[0] = (byte)PiccCommand.PICC_CMD_SEL_CL3;
+                        uidIndex = 6;
+                        useCascadeTag = false;
+                        break;
+                    }
+                    default: 
+                        return StatusCode.InternalError;
+                }
+
+                sbyte currentLevelKnownBits = (sbyte)(validBits - (8 * uidIndex));
+                if (currentLevelKnownBits < 0)
+                {
+                    currentLevelKnownBits = 0;
+                }
+
+                index = 2;
+
+                if (useCascadeTag)
+                {
+                    buffer[index++] = (byte)PiccCommand.PICC_CMD_CT;
+                }
+
+                byte bytesToCopy = (byte)(currentLevelKnownBits / 8 + (currentLevelKnownBits % 8 != 0 ? 1 : 0));
+
+                if (bytesToCopy > 0)
+                {
+                    byte maxBytes = useCascadeTag ? (byte)3 : (byte)4;
+
+                    if (bytesToCopy > maxBytes)
+                    {
+                        bytesToCopy = maxBytes;
+                    }
+
+                    for (int i = 0; i < bytesToCopy; i++)
+                    {
+                        buffer[i++] = uid.UnsafeValue[uidIndex + i];
+                    }
+                }
+
+                if (useCascadeTag)
+                {
+                    currentLevelKnownBits += 8;
+                }
+
+                bool selectDone = false;
+                while (!selectDone)
+                {
+                    if (currentLevelKnownBits >= 32)
+                    {
+                        buffer[1] = 0x70;
+                        buffer[6] = (byte)(buffer[2] ^ buffer[3] ^ buffer[4] ^ buffer[5]);
+                        result = CalculateCRC(buffer.Slice(0, 7), buffer.Slice(7, 2));
+                        
+                        if (result != StatusCode.Ok)
+                        {
+                            return result;
+                        }
+
+                        txLastBits = 0;
+                        bufferUsed = 9;
+                        responseBuffer = buffer.Slice(6, 3);
+                    }
+                    else // ANTI COLLISION
+                    {
+                        txLastBits = (byte)(currentLevelKnownBits % 8);
+                        count = (byte)(currentLevelKnownBits / 8);
+                        index = (byte)(2 + count);
+                        buffer[1] = (byte)((index << 4) + txLastBits);
+                        bufferUsed = (byte)(index + (txLastBits != 0 ? 1 : 0));
+                        responseBuffer = buffer.Slice(index);
+                    }
+                    
+                    rxAlign = txLastBits;
+                    RegisterSet(MFRC522Register.BitFramingReg, (byte)((rxAlign << 4) + txLastBits));
+
+                    result = PCD_TransceiveData(buffer.Slice(0, bufferUsed), responseBuffer, out int responseLen, ref txLastBits, rxAlign);
+                    if (result == StatusCode.Ok || result == StatusCode.Collision)
+                    {
+                        //Console.WriteLine($"respBufferLen: {responseBuffer.Length}, outlen={responseLen}");
+                        responseBuffer = responseBuffer.Slice(0, responseLen);
+                    }
+                    else
+                    {
+                        //Console.WriteLine($"respBufferLen: error");
+                    }
+
+                    if (result == StatusCode.Collision)
+                    {
+                        //Console.WriteLine("transceive: collision");
+                        byte valueOfCollReg = RegisterGet(MFRC522Register.CollReg);
+                        if ((valueOfCollReg & 0x20) != 0)
+                        {
+                            return StatusCode.Collision;
+                        }
+
+                        byte collisionPos = (byte)(valueOfCollReg & 0x1F);
+                        if (collisionPos == 0)
+                        {
+                            collisionPos = 32;
+                        }
+
+                        if (collisionPos <= currentLevelKnownBits)
+                        {
+                            return StatusCode.InternalError;
+                        }
+
+                        currentLevelKnownBits = (sbyte)collisionPos;
+                        count = (byte)(currentLevelKnownBits % 8);
+                        checkBit = (byte)((currentLevelKnownBits - 1) % 8);
+                        index = (byte)(1 + (currentLevelKnownBits / 8) + (count != 0 ? 1 : 0));
+                        buffer[index] |= (byte)(1 << checkBit);
+                    }
+                    else if (result != StatusCode.Ok)
+                    {
+                        //Console.WriteLine("transceive: error");
+                        return result;
+                    }
+                    else
+                    {
+                        //Console.WriteLine("transceive: ok");
+                        if (currentLevelKnownBits >= 32)
+                        {
+                            selectDone = true;
+                        }
+                        else
+                        {
+                            currentLevelKnownBits = 32;
+                        }
+                    }
+                } // while (!selectDone)
+                
+                index = (buffer[2] == (byte)PiccCommand.PICC_CMD_CT) ? (byte)3 : (byte)2;
+                bytesToCopy = (buffer[2] == (byte)PiccCommand.PICC_CMD_CT) ? (byte)3 : (byte)4;
+
+                Span<byte> uidBytes = uid.UnsafeValue;
+                for (count = 0; count < bytesToCopy; count++)
+                {
+                    uidBytes[uidIndex + count] = buffer[index++];
+                }
+
+                if (responseBuffer.Length != 3 || txLastBits != 0)
+                {
+                    return StatusCode.Error;
+                }
+
+                result = CalculateCRC(responseBuffer.Slice(0, 1), buffer.Slice(2, 2));
+
+                if (result != StatusCode.Ok)
+                {
+                    return result;
+                }
+
+                if ((buffer[2] != responseBuffer[1]) || (buffer[3] != responseBuffer[2]))
+                {
+                    return StatusCode.CrcMismatch;
+                }
+
+                if ((responseBuffer[0] & 0x04) != 0)
+                {
+                    cascadeLevel++;
+                }
+                else
+                {
+                    uidComplete = true;
+                    uid.Sak = responseBuffer[0];
+                }
+            } // while (!uidComplete)
+
+            uid.Size = (byte)(3 * cascadeLevel + 1);
+            return StatusCode.Ok;
+        }
+
         public bool PICC_IsNewCardPresent()
         {
             // Reset baud rates
@@ -385,6 +610,12 @@ namespace Iot.Device.RfidRc522
             Span<byte> atqa = stackalloc byte[2];
             StatusCode result = PICC_RequestA(atqa, out int bytesWritten);
             return result == StatusCode.Ok || result == StatusCode.Collision;
+        }
+
+        public bool PICC_ReadCardSerial(ref Uid uid)
+        {
+            StatusCode result = PICC_Select(ref uid);
+            return result == StatusCode.Ok;
         }
 
         //private void WriteToCommandRegister(MFRC52Command command)
