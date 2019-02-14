@@ -1,4 +1,4 @@
-﻿// Licensed to the .NET Foundation under one or more agreements.
+// Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
@@ -342,7 +342,7 @@ namespace Iot.Device.RfidRc522
             {
                 RegisterSet(MFRC522Register.TxControlReg, (byte)(val | 0x03));
             }
-            //RegisterSetMask(MFRC522Register.TxControlReg, 0x03);      
+            //RegisterSetMask(MFRC522Register.TxControlReg, 0x03);
         }
 
         private StatusCode PICC_REQA_or_WUPA(PiccCommand command, Span<byte> atqa, out int bytesWritten)
@@ -389,7 +389,7 @@ namespace Iot.Device.RfidRc522
 
         //private void WriteToCommandRegister(MFRC52Command command)
         //{
-        //    // 
+        //    //
         //    WriteToRegister(MFRC522Register.CommandReg, (byte)((byte)(0x3 << 4) | (byte)command));
         //    throw new NotImplementedException();
         //}

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Text;
 
@@ -48,7 +48,7 @@ namespace Iot.Device.RfidRc522
         ModGsPReg = 0x29,
         TModeReg = 0x2A,
         TPrescalerReg = 0x2B,
-        TReloadRegHigh = 0x2C, // TODO: ALL HIGH/LOW might be swapped
+        TReloadRegHigh = 0x2C,
         TReloadRegLow = 0x2D,
         TCounterValRegHigh = 0x2E,
         TCounterValRegLow = 0x2F,
