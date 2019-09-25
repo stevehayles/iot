@@ -45,8 +45,9 @@ namespace System.Device.Pwm.Channels
             _dutyCycleWriter = new StreamWriter(new FileStream($"{_channelPath}/duty_cycle", FileMode.Open, FileAccess.ReadWrite));
             _frequencyWriter = new StreamWriter(new FileStream($"{_channelPath}/period", FileMode.Open, FileAccess.ReadWrite));
 
-            SetFrequency(frequency);
-            DutyCycle = dutyCycle;
+            // If duty cycle is set to value 
+            _dutyCycle = dutyCycle;
+            SetFrequency(frequency, forceUpdateDutyCycle: true);
         }
 
         /// <inheritdoc/>
@@ -90,11 +91,21 @@ namespace System.Device.Pwm.Channels
         /// Sets the frequency for the channel.
         /// </summary>
         /// <param name="frequency">The frequency in hertz to set.</param>
-        private void SetFrequency(int frequency)
+        private void SetFrequency(int frequency, bool forceUpdateDutyCycle = false)
         {
             if (frequency < 0)
             {
                 throw new ArgumentOutOfRangeException(nameof(frequency), frequency, "Value must not be negative.");
+            }
+
+            double oldDutyCycle = _dutyCycle;
+
+            if (forceUpdateDutyCycle || (oldDutyCycle != 0 && frequency > _frequency))
+            {
+                // Since frequency is higher setting frequency now might
+                // cause errors because old duty cycle value (in nanoseconds)
+                // might now exceed maximum possible range
+                DutyCycle = 0;
             }
 
             int periodInNanoseconds = GetPeriodInNanoseconds(frequency);
@@ -102,6 +113,9 @@ namespace System.Device.Pwm.Channels
             _frequencyWriter.Write(periodInNanoseconds);
             _frequencyWriter.Flush();
             _frequency = frequency;
+
+            // Update duty cycle accordingly
+            DutyCycle = oldDutyCycle;
         }
 
         /// <summary>

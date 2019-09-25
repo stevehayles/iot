@@ -3,9 +3,11 @@
 // See the LICENSE file in the project root for more information.
 
 using System.Device.Gpio.Drivers;
+using Xunit;
 
 namespace System.Device.Gpio.Tests
 {
+    [Trait("requirement", "root")]
     public class SysFsDriverTests : GpioControllerTestBase
     {
         protected override GpioDriver GetTestDriver() => new SysFsDriver();
