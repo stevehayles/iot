@@ -3,6 +3,7 @@
 // See the LICENSE file in the project root for more information.
 
 using System.IO;
+using System.Text;
 using System.Threading;
 
 namespace System.Device.Pwm.Channels
@@ -42,12 +43,16 @@ namespace System.Device.Pwm.Channels
             Open();
 
             // avoid opening the file for operations changing relatively frequently
-            _dutyCycleWriter = new StreamWriter(new FileStream($"{_channelPath}/duty_cycle", FileMode.Open, FileAccess.ReadWrite));
+            var dutyCycleFile = new FileStream($"{_channelPath}/duty_cycle", FileMode.Open, FileAccess.ReadWrite);
+            _dutyCycleWriter = new StreamWriter(dutyCycleFile);
             _frequencyWriter = new StreamWriter(new FileStream($"{_channelPath}/period", FileMode.Open, FileAccess.ReadWrite));
 
-            // If duty cycle is set to value 
-            _dutyCycle = dutyCycle;
-            SetFrequency(frequency, forceUpdateDutyCycle: true);
+            using (var sr = new StreamReader(dutyCycleFile, Encoding.UTF8, detectEncodingFromByteOrderMarks: false, bufferSize: 10, leaveOpen: true))
+            {
+                int currentDutyCycleNs;
+                int.TryParse(sr.ReadLine(), out currentDutyCycleNs);
+                SetFrequency(frequency, dutyCycle, currentDutyCycleNs);
+            }
         }
 
         /// <inheritdoc/>
@@ -59,7 +64,7 @@ namespace System.Device.Pwm.Channels
             }
             set
             {
-                SetFrequency(value);
+                SetFrequency(value, _dutyCycle);
             }
         }
 
@@ -91,31 +96,32 @@ namespace System.Device.Pwm.Channels
         /// Sets the frequency for the channel.
         /// </summary>
         /// <param name="frequency">The frequency in hertz to set.</param>
-        private void SetFrequency(int frequency, bool forceUpdateDutyCycle = false)
+        private void SetFrequency(int frequency, double newDutyCycle, int? dutyCycleOnTimeNs = null)
         {
             if (frequency < 0)
             {
                 throw new ArgumentOutOfRangeException(nameof(frequency), frequency, "Value must not be negative.");
             }
 
-            double oldDutyCycle = _dutyCycle;
+            int periodInNanoseconds = GetPeriodInNanoseconds(frequency);
 
-            if (forceUpdateDutyCycle || (oldDutyCycle != 0 && frequency > _frequency))
+            int dutyCycleNs = dutyCycleOnTimeNs ?? GetDutyCycleOnTimeNs(GetPeriodInNanoseconds(_frequency), _dutyCycle);
+
+            if (dutyCycleNs > periodInNanoseconds)
             {
-                // Since frequency is higher setting frequency now might
-                // cause errors because old duty cycle value (in nanoseconds)
-                // might now exceed maximum possible range
+                // Setting frequency now would cause error
+                // Preset duty cycle to zero temporarily.
+                // Doing it always might cause issues just after boot
+                // since driver requires to set frequency first.
                 DutyCycle = 0;
             }
 
-            int periodInNanoseconds = GetPeriodInNanoseconds(frequency);
             _frequencyWriter.BaseStream.SetLength(0);
             _frequencyWriter.Write(periodInNanoseconds);
             _frequencyWriter.Flush();
             _frequency = frequency;
 
-            // Update duty cycle accordingly
-            DutyCycle = oldDutyCycle;
+            DutyCycle = newDutyCycle;
         }
 
         /// <summary>
@@ -130,11 +136,16 @@ namespace System.Device.Pwm.Channels
             }
 
             // In Linux, the period needs to be a whole number and can't have decimal point.
-            int dutyCycleInNanoseconds = (int)(GetPeriodInNanoseconds(_frequency) * dutyCycle);
+            int dutyCycleInNanoseconds = GetDutyCycleOnTimeNs(GetPeriodInNanoseconds(_frequency), dutyCycle);
             _dutyCycleWriter.BaseStream.SetLength(0);
             _dutyCycleWriter.Write(dutyCycleInNanoseconds);
             _dutyCycleWriter.Flush();
             _dutyCycle = dutyCycle;
+        }
+
+        private static int GetDutyCycleOnTimeNs(int pwmPeriodNs, double dutyCycle)
+        {
+            return (int)(pwmPeriodNs * dutyCycle);
         }
 
         /// <summary>
