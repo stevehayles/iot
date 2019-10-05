@@ -47,11 +47,17 @@ namespace System.Device.Pwm.Channels
             _dutyCycleWriter = new StreamWriter(dutyCycleFile);
             _frequencyWriter = new StreamWriter(new FileStream($"{_channelPath}/period", FileMode.Open, FileAccess.ReadWrite));
 
+            int currentDutyCycleNs = GetCurrentDutyCycleNs(dutyCycleFile);
+            SetFrequency(frequency, dutyCycle, currentDutyCycleNs);
+        }
+
+        private static int GetCurrentDutyCycleNs(FileStream dutyCycleFile)
+        {
             using (var sr = new StreamReader(dutyCycleFile, Encoding.UTF8, detectEncodingFromByteOrderMarks: false, bufferSize: 10, leaveOpen: true))
             {
                 int currentDutyCycleNs;
                 int.TryParse(sr.ReadLine(), out currentDutyCycleNs);
-                SetFrequency(frequency, dutyCycle, currentDutyCycleNs);
+                return currentDutyCycleNs;
             }
         }
 
@@ -109,10 +115,21 @@ namespace System.Device.Pwm.Channels
 
             if (dutyCycleNs > periodInNanoseconds)
             {
-                // Setting frequency now would cause error
-                // Preset duty cycle to zero temporarily.
-                // Doing it always might cause issues just after boot
-                // since driver requires to set frequency first.
+                // Internally duty cycle is represented as `on time` and frequency as `period`
+                // When changing to certain values of frequency current `on time` might be higher
+                // than period which would cause driver to cause error ("invalid argument").
+                // We cannot set duty cycle first as well because we have similar problem.
+                // Also after rebooting both period and duty cycle are zeros which requires
+                // period to be always set first.
+                // What we do to fix this is following:
+                // - at program start we read current value of duty cycle time in ns and this is the real value
+                // - any time later we use cached value and assume cached value is correct
+                //   - external changes to the file will cause issues with this assumption
+                // - we prefer setting frequency first
+                // - the only time this doesn't work is when we are required to use temporary value
+                //
+                // Now additionally there is chicken and the egg problem: we cannot use _dutyCycle value at startup
+                // At startup we are required that this value is passed in explicitly.
                 DutyCycle = 0;
             }
 
